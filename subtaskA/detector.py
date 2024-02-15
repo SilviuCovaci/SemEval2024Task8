@@ -71,9 +71,7 @@ class PreprocessDataset(Dataset):
 
         text_tokens = self._tokenize(text)
         text_tokens = self._stopword_filtering(text_tokens)
-        text_tokens = self._stemming(text_tokens)
-        text_tokens = self._lemmatisation(text_tokens)
-        
+        #text_tokens = self._stemming(text_tokens)
         text = self._stitch_text_tokens_together(text_tokens)
 
         return text.strip()
@@ -185,7 +183,29 @@ class CustomClassifierRobertaLarge(nn.Module):
         x = self.sigmoid(x)
 
         return x
-    
+
+class CustomClassifier2(nn.Module):
+    def __init__(self, pretrained_model):
+        super(CustomClassifier2, self).__init__()
+
+        self.bert = pretrained_model
+        self.fc1 = nn.Linear(1024, 8)
+        self.fc2 = nn.Linear(8, 1)
+
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+        
+    def forward(self, input_ids, attention_mask):
+        bert_out = self.bert(input_ids=input_ids,
+                             attention_mask=attention_mask)[0][:, 0]
+        x = self.fc1(bert_out)
+        x = self.relu(x)
+        
+        x = self.fc2(x)
+        x = self.sigmoid(x)
+
+        return x
+        
 class CustomClassifierAlbert(nn.Module):
     def __init__(self, pretrained_model):
         super(CustomClassifierAlbert, self).__init__()
@@ -367,24 +387,22 @@ def train(model, train_dataloader, val_dataloader, learning_rate, epochs, model_
         model.train()
         
         for train_input, train_label in tqdm(train_dataloader):
-            optimizer.zero_grad()
+            #optimizer.zero_grad()
         
             attention_mask = train_input['attention_mask'].to(device)
             input_ids = train_input['input_ids'].squeeze(1).to(device)
-            #print("for train size=", input_ids.shape, attention_mask.shape)    
+            
             train_label = train_label.to(device)
-
             output = model(input_ids, attention_mask)
-
             loss = criterion(output, train_label.float().unsqueeze(1))
-
             total_loss_train += loss.item()
 
             acc = ((output >= 0.5).int() == train_label.unsqueeze(1)).sum().item()
             total_acc_train += acc
-
+            
             loss.backward()
-            optimizer.step()
+            optimizer.step()                        
+            optimizer.zero_grad()
             
 
         with torch.no_grad():
@@ -504,15 +522,20 @@ def load_and_evaluate(model_name = ''):
     #global app_configs
     if (model_name):
         app_configs['model_name'] = model_name
+    
+    #print(app_configs)
+    #/exit()
         
     test_df = pd.read_json(app_configs['test_path'], lines=True)
     test_df = test_df.drop(["model", "source"], axis=1)
+    print("test loaded:", app_configs['test_path']);
     
     target_device()
     tokenizer, pretrained_model = get_pretrained_model()
     
-    model = torch.load(app_configs['models_path'] + app_configs['model_name'] + ".pt")
-    
+    model_path = app_configs['models_path'] + app_configs['model_name'] + ".pt"    
+    model = torch.load(model_path)
+    print("model loaded:", model_path);
     predictions_df = pd.DataFrame({'id': test_df['id']})
     test_dataloader = DataLoader(PreprocessDataset(test_df, tokenizer), batch_size=8, shuffle=False, num_workers=0)
     predictions_df['label'] = get_text_predictions(model, test_dataloader)
@@ -550,6 +573,9 @@ def creare_train_evaluate_vectorised():
     # Antrenarea modelului pe datele de antrenare
     classifier.fit(X_train, y_train)
 
+
+def load_app_options(model_name):
+    options = pd.read_json(train_path, lines=True)
     
 def save_app_options():
     configs = app_configs.copy()
@@ -589,12 +615,14 @@ distilbert_model_configs2 = {
 robertabase_model_configs1 = {
     'base_model': 'roberta-base',
     'classifier': 'CustomClassifierBase', 
+    'test_path': absolute_path + '/subtaskA_monolingual_gold.jsonl',
 }
 
 robertalarge_model_configs1 = {
     'base_model': 'roberta-large',    
     'classifier': 'CustomClassifierRobertaLarge', 
-    'percent_of_data': 100,
+    'percent_of_data': 15,
+    'learning_rate': 1e-5,
 }
 
 bert_model_configs1 = {
@@ -649,7 +677,7 @@ default_configs = {
 
 
 app_configs = default_configs.copy()
-app_configs.update(robertabase_model_configs1)
+app_configs.update(robertalarge_model_configs1)
 
 app_configs['model_name'] = app_configs['timestamp_prefix'] + "_" + app_configs['task'] + "_" + app_configs['base_model'].replace("/", "_")
 app_configs['prediction_path'] = absolute_path + '/predictions/' + app_configs['model_name'] + '.predictions.jsonl'
@@ -660,6 +688,7 @@ print("Working on pretrained-model:", app_configs['base_model'])
 
 #model names that can be used for evaluation:
 #model name roberta-large trained = 202401112145_subtaskA_monolingual_roberta-large
+#model name roberta-base trained = 202402061024_subtaskA_monolingual_roberta
 #model name for distilbert-base-uncased trained = 202401120919_subtaskA_monolingual_distilbert-base-uncased - 2 layers
 
 #multilang tests
@@ -667,6 +696,7 @@ print("Working on pretrained-model:", app_configs['base_model'])
 #model name for distilbert-base-multilingual-cased = 202401231736_subtaskA_monolingual_distilbert-base-multilingual-cased.options.jsonl
 #creare_train_evaluate_vectorised()
 #exit()
+#model_for_evaluate='202402061024_subtaskA_monolingual_roberta-base'
 model_for_evaluate=''
 create_and_train()
 load_and_evaluate(model_for_evaluate)
